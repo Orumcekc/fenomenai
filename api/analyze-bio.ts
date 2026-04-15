@@ -2,7 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = 'gemini-2.5-flash';
+
+const TEXT_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite'
+];
+
 const SYSTEM_INSTRUCTION = "Sen profesyonel bir sosyal medya uzmanısın. Tüm yanıtlarını mükemmel bir Türkçe ile vermelisin.";
 
 function cleanJsonString(text: string): string {
@@ -19,7 +25,35 @@ function cleanJsonString(text: string): string {
 function safeJsonParse(text: string, fallback: any) {
   try {
     return JSON.parse(cleanJsonString(text));
-  } catch { return fallback; }
+  } catch {
+    return fallback;
+  }
+}
+
+async function generateWithFallback(ai: any, config: any): Promise<any> {
+  let lastError: any = null;
+  for (const model of TEXT_MODELS) {
+    try {
+      console.log(`Deneniyor: ${model}`);
+      const response = await ai.models.generateContent({
+        ...config,
+        model
+      });
+      console.log(`Başarılı: ${model}`);
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || '';
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') ||
+          msg.includes('429') || msg.includes('overloaded') ||
+          msg.includes('high demand')) {
+        console.warn(`${model} yoğun, sonraki deneniyor...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error('Tüm modeller yoğun. Lütfen biraz bekleyin.');
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -34,11 +68,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const prompt = `
       Biyografi: "${bio}"
       Niş: ${niche}
-      Analiz et ve JSON dön: { score: number, suggestions: string[], rewrittenBios: string[] }
+      
+      Bu biyografiyi analiz et ve şunları yap:
+      1. 0-100 arası bir skor ver (ne kadar etkili?)
+      2. En az 3 iyileştirme önerisi sun
+      3. En az 3 farklı yeniden yazılmış biyografi öner
+      
+      JSON olarak yanıtla: { "score": number, "suggestions": string[], "rewrittenBios": string[] }
     `;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+    const response = await generateWithFallback(ai, {
       contents: prompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -66,6 +105,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(result);
   } catch (error: any) {
     console.error("Bio analysis error:", error);
+    const msg = error?.message || '';
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return res.status(503).json({
+        error: 'AI modelleri yoğun. 30sn bekleyip deneyin.',
+        code: 'ALL_MODELS_BUSY'
+      });
+    }
     return res.status(500).json({ error: error?.message || 'Analiz yapılamadı' });
   }
 }
