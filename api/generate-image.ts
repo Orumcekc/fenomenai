@@ -2,8 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const IMAGE_MODEL = 'gemini-2.5-flash-preview-image';
-const FALLBACK_MODEL = 'gemini-2.0-flash-exp';
+const IMAGE_MODEL = 'gemini-2.0-flash-exp';
+const FALLBACK_MODEL = 'gemini-2.0-flash';
 
 function extractImageFromResponse(response: any): string {
   if (!response?.candidates?.[0]) throw new Error("API'den boş yanıt döndü.");
