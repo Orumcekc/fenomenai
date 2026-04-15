@@ -2,7 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI, Type } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = 'gemini-2.5-flash';
+
+const TEXT_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite'
+];
+
 const SYSTEM_INSTRUCTION = "Sen profesyonel bir sosyal medya uzmanısın. Tüm yanıtlarını mükemmel bir Türkçe ile vermelisin.";
 
 function cleanJsonString(text: string): string {
@@ -19,7 +25,9 @@ function cleanJsonString(text: string): string {
 function safeJsonParse(text: string, fallback: any) {
   try {
     return JSON.parse(cleanJsonString(text));
-  } catch { return fallback; }
+  } catch {
+    return fallback;
+  }
 }
 
 function validateSlides(data: any) {
@@ -32,6 +40,32 @@ function validateSlides(data: any) {
       imagePrompt: typeof item.imagePrompt === 'string' && item.imagePrompt ? item.imagePrompt : "Görsel tarifi yok.",
       designNote: typeof item.designNote === 'string' && item.designNote ? item.designNote : ""
     }));
+}
+
+async function generateWithFallback(ai: any, config: any): Promise<any> {
+  let lastError: any = null;
+  for (const model of TEXT_MODELS) {
+    try {
+      console.log(`Deneniyor: ${model}`);
+      const response = await ai.models.generateContent({
+        ...config,
+        model
+      });
+      console.log(`Başarılı: ${model}`);
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || '';
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') ||
+          msg.includes('429') || msg.includes('overloaded') ||
+          msg.includes('high demand')) {
+        console.warn(`${model} yoğun, sonraki deneniyor...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error('Tüm modeller yoğun. Lütfen biraz bekleyin.');
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -55,11 +89,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       3-6. Slaytlar (Climax): Analiz ve ifşa
       Son Slayt (Resolution): Net hüküm ve düşündürücü soru
       
-      En az 5, en fazla 8 slayt. JSON objesi olarak yanıtla.
+      En az 5, en fazla 8 slayt.
+      
+      Her slayt için:
+      - slideNumber: Slayt numarası
+      - text: Slaytta yazacak metin
+      - imagePrompt: İngilizce görsel tarifi
+      - designNote: Tasarım notu
+      
+      JSON objesi olarak yanıtla.
     `;
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+    const response = await generateWithFallback(ai, {
       contents: prompt,
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -98,6 +139,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(result);
   } catch (error: any) {
     console.error("Carousel plan error:", error);
+    const msg = error?.message || '';
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return res.status(503).json({
+        error: 'AI modelleri yoğun. 30sn bekleyip deneyin.',
+        code: 'ALL_MODELS_BUSY'
+      });
+    }
     return res.status(500).json({ error: error?.message || 'Carousel planı oluşturulamadı' });
   }
 }
