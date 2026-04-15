@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = 'gemini-2.5-flash-preview-05-20';
+const MODEL_NAME = 'gemini-2.5-flash';
 
 const SYSTEM_INSTRUCTION = "Sen profesyonel bir sosyal medya uzmanısın. Tüm yanıtlarını mükemmel bir Türkçe ile, imla ve yazım kurallarına (TDK uyumlu) titizlikle uyarak vermelisin. İçeriklerin yaratıcı, ilgi çekici ve viral potansiyeli yüksek olmalı.";
 
