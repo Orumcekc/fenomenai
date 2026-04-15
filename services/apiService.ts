@@ -2,18 +2,10 @@ import {
   GeneratedContent,
   StrategyPlan,
   BioAnalysis,
-  CarouselPlanResponse,
-  ContentRequest,
-  StrategyRequest,
-  BioRequest,
-  CarouselRequest,
-  CarouselImageRequest,
-  EditImageRequest
+  CarouselPlanResponse
 } from '../types';
 
 const API_BASE = '/api';
-
-// --- RETRY & ERROR HANDLING ---
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 2000;
@@ -23,7 +15,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 class ApiError extends Error {
   code: string;
   status: number;
-  
+
   constructor(message: string, status: number, code: string = 'UNKNOWN') {
     super(message);
     this.name = 'ApiError';
@@ -56,11 +48,19 @@ async function apiCall<T>(
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Bilinmeyen hata' }));
-        
-        // Rate limit → bekle ve tekrar dene
+
+        // Rate limit (429) → bekle ve tekrar dene
         if (response.status === 429 && attempt < retries) {
           const waitTime = RETRY_DELAY * Math.pow(2, attempt);
           console.warn(`Rate limit, ${waitTime}ms beklenecek (deneme ${attempt + 1}/${retries + 1})`);
+          await sleep(waitTime);
+          continue;
+        }
+
+        // Model yoğunluğu (503) → bekle ve tekrar dene
+        if (response.status === 503 && attempt < retries) {
+          const waitTime = 5000 * (attempt + 1);
+          console.warn(`Model yoğun, ${waitTime / 1000}sn bekleniyor (deneme ${attempt + 1}/${retries + 1})`);
           await sleep(waitTime);
           continue;
         }
@@ -139,7 +139,7 @@ export async function generateCarouselImage(
 ): Promise<string> {
   const response = await apiCall<{ image: string }>('generate-image', {
     fullPrompt, referenceImageBase64
-  }, MAX_RETRIES, 150000); // Görsel üretimi daha uzun sürer
+  }, MAX_RETRIES, 150000);
   return response.image;
 }
 
@@ -157,10 +157,9 @@ export async function generateCustomImage(
   prompt: string,
   aspectRatio: string
 ): Promise<string> {
-  const fullPrompt = `${prompt}. Style: Nano Banana Pro, 8K, cinematic. Typography Focus: Text MUST be legible, bold, high-contrast.`;
+  const fullPrompt = `${prompt}. Style: Cinematic 8K render, professional photography quality. Aspect ratio: ${aspectRatio}. Typography Focus: Any text in the image MUST be legible, bold, high-contrast.`;
   const response = await apiCall<{ image: string }>('generate-image', {
-    fullPrompt,
-    aspectRatio
+    fullPrompt
   }, MAX_RETRIES, 150000);
   return response.image;
 }
