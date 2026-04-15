@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const prompt = `Görselin üzerine şu metni ekle: "${newText}". Metin çok büyük, kalın, yüksek kontrastlı ve okunabilir olmalıdır.`;
 
     const response = await ai.models.generateContent({
-      model: FALLBACK_MODEL,
+  model: IMAGE_MODEL,
       contents: {
         parts: [
           { inlineData: { mimeType: 'image/png', data: base64Data } },
