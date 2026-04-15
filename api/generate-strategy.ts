@@ -2,14 +2,27 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = 'gemini-2.5-flash';
+
+const TEXT_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite'
+];
+
 const SYSTEM_INSTRUCTION = "Sen profesyonel bir sosyal medya uzmanısın. Tüm yanıtlarını mükemmel bir Türkçe ile vermelisin.";
 
 function cleanJsonString(text: string): string {
   if (!text) return "[]";
   let clean = text.replace(/```json/g, '').replace(/```/g, '');
   const firstBracket = clean.indexOf('[');
-  if (firstBracket === -1) return clean;
+  if (firstBracket === -1) {
+    const firstBrace = clean.indexOf('{');
+    if (firstBrace === -1) return clean;
+    clean = clean.substring(firstBrace);
+    const end = clean.lastIndexOf('}');
+    if (end !== -1) clean = clean.substring(0, end + 1);
+    return clean.trim();
+  }
   clean = clean.substring(firstBracket);
   const end = clean.lastIndexOf(']');
   if (end !== -1) clean = clean.substring(0, end + 1);
@@ -19,9 +32,10 @@ function cleanJsonString(text: string): string {
 function safeJsonParse(text: string, fallback: any) {
   try {
     const cleaned = cleanJsonString(text);
-    const parsed = JSON.parse(cleaned);
-    return parsed;
-  } catch { return fallback; }
+    return JSON.parse(cleaned);
+  } catch {
+    return fallback;
+  }
 }
 
 function validateStrategy(data: any) {
@@ -39,6 +53,32 @@ function validateStrategy(data: any) {
       focus: typeof item.focus === 'string' ? item.focus : "",
       idea: typeof item.idea === 'string' ? item.idea : ""
     }));
+}
+
+async function generateWithFallback(ai: any, config: any): Promise<any> {
+  let lastError: any = null;
+  for (const model of TEXT_MODELS) {
+    try {
+      console.log(`Deneniyor: ${model}`);
+      const response = await ai.models.generateContent({
+        ...config,
+        model
+      });
+      console.log(`Başarılı: ${model}`);
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || '';
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') ||
+          msg.includes('429') || msg.includes('overloaded') ||
+          msg.includes('high demand')) {
+        console.warn(`${model} yoğun, sonraki deneniyor...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error('Tüm modeller yoğun. Lütfen biraz bekleyin.');
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -81,8 +121,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       parts.unshift({ inlineData: { mimeType: mediaData.mimeType, data: mediaData.data } });
     }
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+    const response = await generateWithFallback(ai, {
       contents: { role: 'user', parts },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -97,7 +136,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(result);
   } catch (error: any) {
     console.error("Strategy error:", error);
-    const status = error?.message?.includes('429') ? 429 : 500;
-    return res.status(status).json({ error: error?.message || 'Strateji oluşturulamadı', code: status === 429 ? 'RATE_LIMIT' : 'SERVER_ERROR' });
+    const msg = error?.message || '';
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return res.status(503).json({
+        error: 'AI modelleri yoğun. 30sn bekleyip tekrar deneyin.',
+        code: 'ALL_MODELS_BUSY'
+      });
+    }
+    const status = msg.includes('429') ? 429 : 500;
+    return res.status(status).json({
+      error: error?.message || 'Strateji oluşturulamadı',
+      code: status === 429 ? 'RATE_LIMIT' : 'SERVER_ERROR'
+    });
   }
 }
