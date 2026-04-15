@@ -2,7 +2,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { GoogleGenAI } from '@google/genai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
-const MODEL_NAME = 'gemini-2.5-flash';
+
+const TEXT_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-2.5-flash-lite'
+];
 
 const SYSTEM_INSTRUCTION = "Sen profesyonel bir sosyal medya uzmanısın. Tüm yanıtlarını mükemmel bir Türkçe ile, imla ve yazım kurallarına (TDK uyumlu) titizlikle uyarak vermelisin. İçeriklerin yaratıcı, ilgi çekici ve viral potansiyeli yüksek olmalı.";
 
@@ -62,6 +67,32 @@ function safeJsonParse(text: string, fallback: any) {
   }
 }
 
+async function generateWithFallback(ai: any, config: any): Promise<any> {
+  let lastError: any = null;
+  for (const model of TEXT_MODELS) {
+    try {
+      console.log(`Deneniyor: ${model}`);
+      const response = await ai.models.generateContent({
+        ...config,
+        model
+      });
+      console.log(`Başarılı: ${model}`);
+      return response;
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || '';
+      if (msg.includes('503') || msg.includes('UNAVAILABLE') ||
+          msg.includes('429') || msg.includes('overloaded') ||
+          msg.includes('high demand')) {
+        console.warn(`${model} yoğun, sonraki deneniyor...`);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error('Tüm modeller yoğun. Lütfen biraz bekleyin.');
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
@@ -98,8 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       parts.unshift({ inlineData: { mimeType: mediaData.mimeType, data: mediaData.data } });
     }
 
-    const response = await ai.models.generateContent({
-      model: MODEL_NAME,
+    const response = await generateWithFallback(ai, {
       contents: { role: 'user', parts },
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
@@ -119,8 +149,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(result);
   } catch (error: any) {
     console.error("Content generation error:", error);
-    const status = error?.message?.includes('429') ? 429 : 500;
-    return res.status(status).json({ 
+    const msg = error?.message || '';
+    if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+      return res.status(503).json({
+        error: 'Tüm AI modelleri şu an yoğun. 30 saniye bekleyip tekrar deneyin.',
+        code: 'ALL_MODELS_BUSY'
+      });
+    }
+    const status = msg.includes('429') ? 429 : 500;
+    return res.status(status).json({
       error: error?.message || 'İçerik oluşturulurken hata oluştu',
       code: status === 429 ? 'RATE_LIMIT' : 'SERVER_ERROR'
     });
